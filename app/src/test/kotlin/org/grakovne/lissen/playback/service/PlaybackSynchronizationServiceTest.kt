@@ -66,10 +66,7 @@ class PlaybackSynchronizationServiceTest {
     every { exoPlayer.addListener(capture(listenerSlot)) } returns Unit
 
     mockkStatic(SystemClock::class)
-    every { SystemClock.elapsedRealtime() } answers {
-      clockMs += 5_000
-      clockMs
-    }
+    every { SystemClock.elapsedRealtime() } answers { clockMs }
 
     mockkConstructor(Bundle::class)
     every { anyConstructed<Bundle>().putLong(any(), any()) } returns Unit
@@ -102,6 +99,10 @@ class PlaybackSynchronizationServiceTest {
     every { exoPlayer.currentPosition } returns positionMs
     every { exoPlayer.isPlaying } returns isPlaying
     every { exoPlayer.playWhenReady } returns playWhenReady
+  }
+
+  private fun advanceClock(milliseconds: Long) {
+    clockMs += milliseconds
   }
 
   private fun bookWithProgress(currentTime: Double): DetailedItem =
@@ -169,6 +170,7 @@ class PlaybackSynchronizationServiceTest {
         playerAt(positionMs = 100_000L, isPlaying = true, playWhenReady = true)
         playerListener.onEvents(exoPlayer, playbackEvents(Player.EVENT_IS_PLAYING_CHANGED))
 
+        advanceClock(SYNC_INTERVAL_SHORT)
         testScheduler.advanceTimeBy(SYNC_INTERVAL_SHORT.milliseconds)
         runCurrent()
 
@@ -221,6 +223,7 @@ class PlaybackSynchronizationServiceTest {
         playerAt(positionMs = 100_000L, isPlaying = true, playWhenReady = true)
         playerListener.onEvents(exoPlayer, playbackEvents(Player.EVENT_IS_PLAYING_CHANGED))
 
+        advanceClock(SYNC_INTERVAL_SHORT)
         testScheduler.advanceTimeBy(SYNC_INTERVAL_SHORT.milliseconds)
         runCurrent()
 
@@ -238,6 +241,8 @@ class PlaybackSynchronizationServiceTest {
         // event syncs the last listening stretch (unsyncedMs back to 0); a
         // subsequent sync event while paused there must not be suppressed by the
         // restore gate.
+        advanceClock(SYNC_INTERVAL_SHORT)
+
         playerAt(positionMs = 100_000L)
         playerListener.onEvents(exoPlayer, playbackEvents(Player.EVENT_IS_PLAYING_CHANGED))
 
@@ -266,6 +271,7 @@ class PlaybackSynchronizationServiceTest {
         service.startPlaybackSynchronization(bookWithProgress(100.0))
         playerListener.onEvents(exoPlayer, playbackEvents(Player.EVENT_IS_PLAYING_CHANGED))
 
+        advanceClock(SYNC_INTERVAL_SHORT)
         testScheduler.advanceTimeBy(SYNC_INTERVAL_SHORT.milliseconds)
         runCurrent()
 
@@ -308,6 +314,7 @@ class PlaybackSynchronizationServiceTest {
         service.startPlaybackSynchronization(bookWithProgress(100.0))
         playerListener.onEvents(exoPlayer, playbackEvents(Player.EVENT_IS_PLAYING_CHANGED))
 
+        advanceClock(SYNC_INTERVAL_SHORT)
         testScheduler.advanceTimeBy(SYNC_INTERVAL_SHORT.milliseconds)
         runCurrent()
 
@@ -358,6 +365,7 @@ class PlaybackSynchronizationServiceTest {
     ) {
       val deadline = System.currentTimeMillis() + 5_000
       while (callOrder.size < expected.size && System.currentTimeMillis() < deadline) {
+        advanceClock(SYNC_INTERVAL_SHORT)
         scheduler.advanceTimeBy(SYNC_INTERVAL_SHORT.milliseconds)
         scheduler.runCurrent()
         Thread.sleep(20)
