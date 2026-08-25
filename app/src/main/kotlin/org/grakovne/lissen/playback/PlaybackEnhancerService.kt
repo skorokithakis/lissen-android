@@ -21,6 +21,7 @@ import org.grakovne.lissen.persistence.preferences.PlaybackPreferences
 import timber.log.Timber
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlin.math.abs
 import kotlin.math.roundToInt
 
 @Singleton
@@ -197,8 +198,8 @@ class PlaybackEnhancerService
             val actual = readBackConfig.getPreEqBandByChannelIndex(0, index)
 
             if (
-              requested.cutoffFrequency == actual.cutoffFrequency &&
-              requested.gain == actual.gain
+              abs(requested.cutoffFrequency - actual.cutoffFrequency) <= 0.01f &&
+              abs(requested.gain - actual.gain) <= 0.01f
             ) {
               null
             } else {
@@ -287,8 +288,9 @@ class PlaybackEnhancerService
         if (equalizerBands.isNotEmpty()) {
           processor.setPreEqAllChannelsTo(buildPreEq())
         }
-        // updateGain toggles the same enabled flag from the boost side; both sides use the
-        // shared rule in isEffectNeeded, so the equalizer alone keeps the effect alive.
+        // updateGain toggles the same enabled flag from the boost side; both use the shared rule
+        // in isEffectNeeded, so active equalizer gains keep it alive only with a device-reported
+        // pre-EQ layout.
         processor.enabled = isEffectNeeded()
       } catch (ex: Exception) {
         Timber.e("Unable to apply equalizer due to: $ex")
@@ -296,8 +298,9 @@ class PlaybackEnhancerService
     }
 
     // The one DynamicsProcessing instance carries the pre-EQ equalizer, the compressor and the
-    // limiter, so the effect stays enabled while either the boost or the equalizer needs it.
-    private fun isEffectNeeded(): Boolean = playbackVolumeBoost > 0 || equalizerSettings.isActive
+    // limiter, so it stays enabled while boost needs it or when active gains have a device-reported
+    // pre-EQ layout to apply.
+    private fun isEffectNeeded(): Boolean = playbackVolumeBoost > 0 || (equalizerSettings.isActive && equalizerBands.isNotEmpty())
 
     @OptIn(UnstableApi::class)
     private suspend fun applyAudioFocusLossPolicy(policy: AudioFocusLossPolicy) {
