@@ -156,7 +156,10 @@ class PlaybackPreferences
     fun getEqualizer(): EqualizerSettings {
       val json = store.getString(KEY_EQUALIZER) ?: return EqualizerSettings.Default
       return try {
-        moshi.adapter(EqualizerSettings::class.java).fromJson(json) ?: EqualizerSettings.Default
+        moshi
+          .adapter(EqualizerSettings::class.java)
+          .fromJson(json)
+          ?: EqualizerSettings.Default
       } catch (e: com.squareup.moshi.JsonDataException) {
         Timber.w("Stored equalizer is malformed, resetting due to: ${e.message}")
         store.remove(KEY_EQUALIZER, commit = true)

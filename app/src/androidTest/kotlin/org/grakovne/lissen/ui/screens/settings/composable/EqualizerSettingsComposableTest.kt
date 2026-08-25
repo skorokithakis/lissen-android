@@ -20,6 +20,7 @@ import org.grakovne.lissen.R
 import org.grakovne.lissen.domain.EqualizerSettings
 import org.grakovne.lissen.playback.BandInfo
 import org.grakovne.lissen.playback.EqualizerCapabilities
+import org.grakovne.lissen.playback.equalizerBandCutoffsHz
 import org.junit.Rule
 import org.junit.Test
 
@@ -29,16 +30,13 @@ class EqualizerSettingsComposableTest {
 
   private val context = InstrumentationRegistry.getInstrumentation().targetContext
 
+  private val centerFrequenciesHz = listOf(60, 230, 910, 3600, 14_000)
   private val bands =
-    listOf(
-      BandInfo(centerFreqHz = 60),
-      BandInfo(centerFreqHz = 230),
-      BandInfo(centerFreqHz = 910),
-      BandInfo(centerFreqHz = 3600),
-      BandInfo(centerFreqHz = 14000),
-    )
+    centerFrequenciesHz.zip(equalizerBandCutoffsHz(centerFrequenciesHz)) { centerFreqHz, cutoffFreqHz ->
+      BandInfo(centerFreqHz = centerFreqHz, cutoffFreqHz = cutoffFreqHz)
+    }
 
-  private val capabilities = EqualizerCapabilities(bands = bands, minDb = -6, maxDb = 6)
+  private val capabilities = EqualizerCapabilities(bands = bands, minDb = -15, maxDb = 15)
 
   private fun bandDescription(freq: String): String = context.getString(R.string.a11y_equalizer_band, freq)
 
@@ -67,10 +65,10 @@ class EqualizerSettingsComposableTest {
     val band = composeRule.onNodeWithContentDescription(bandDescription("60"))
 
     band.performTouchInput { swipe(start = center, end = center.copy(y = top)) }
-    band.assert(stateDescriptionMatcher("+6 dB"))
+    band.assert(stateDescriptionMatcher("+15 dB"))
 
     band.performTouchInput { swipe(start = center, end = center.copy(y = bottom)) }
-    band.assert(stateDescriptionMatcher("−6 dB"))
+    band.assert(stateDescriptionMatcher("−15 dB"))
   }
 
   @Test
@@ -121,7 +119,7 @@ class EqualizerSettingsComposableTest {
     band.assert(stateDescriptionMatcher("+3 dB"))
 
     band.performSemanticsAction(SemanticsActions.SetProgress) { it(-42f) }
-    band.assert(stateDescriptionMatcher("−6 dB"))
+    band.assert(stateDescriptionMatcher("−15 dB"))
   }
 
   @Test

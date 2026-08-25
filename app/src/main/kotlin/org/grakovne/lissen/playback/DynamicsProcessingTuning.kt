@@ -3,7 +3,8 @@ package org.grakovne.lissen.playback
 import android.media.audiofx.DynamicsProcessing
 
 /**
- * Tuning values for the DynamicsProcessing volume boost (single-band compressor + limiter).
+ * Tuning values for the DynamicsProcessing volume boost (single-band compressor + limiter)
+ * and the equalizer, which uses the effect's pre-EQ stage.
  *
  * Every number here is deliberately a one-line edit: the values will be re-tuned by ear.
  */
@@ -14,6 +15,10 @@ internal object DynamicsProcessingTuning {
   // count and replicates the last configured channel when it needs more, so mono and
   // multi-channel sessions both work.
   const val CHANNEL_COUNT = 2
+
+  // The app applies equalizer gains to the pre-EQ layout reported by the device.
+  const val PRE_EQ_MIN_GAIN_DB = -15
+  const val PRE_EQ_MAX_GAIN_DB = 15
 
   const val MBC_BAND_COUNT = 1
   const val MBC_THRESHOLD_DB = -20f

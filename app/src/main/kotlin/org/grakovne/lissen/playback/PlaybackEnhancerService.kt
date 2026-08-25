@@ -1,7 +1,6 @@
 package org.grakovne.lissen.playback
 
 import android.media.audiofx.DynamicsProcessing
-import android.media.audiofx.Equalizer
 import android.media.audiofx.LoudnessEnhancer
 import androidx.annotation.OptIn
 import androidx.media3.common.AudioAttributes
@@ -22,6 +21,7 @@ import org.grakovne.lissen.persistence.preferences.PlaybackPreferences
 import timber.log.Timber
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlin.math.abs
 import kotlin.math.roundToInt
 
 @Singleton
@@ -31,6 +31,7 @@ class PlaybackEnhancerService
   constructor(
     private val player: ExoPlayer,
     private val sharedPreferences: PlaybackPreferences,
+    private val equalizerBandProvider: EqualizerBandProvider,
   ) : RunningComponent {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
@@ -38,7 +39,11 @@ class PlaybackEnhancerService
 
     private var loudnessEnhancer: LoudnessEnhancer? = null
 
-    private var equalizer: Equalizer? = null
+    private var equalizerBands: List<BandInfo> = emptyList()
+
+    private var equalizerSettings: EqualizerSettings = sharedPreferences.getEqualizer()
+
+    private var playbackVolumeBoost: Int = sharedPreferences.getPlaybackVolumeBoost()
 
     @OptIn(UnstableApi::class)
     override fun onCreate() {
@@ -46,12 +51,22 @@ class PlaybackEnhancerService
         object : Player.Listener {
           override fun onAudioSessionIdChanged(id: Int) {
             attachEnhancer(id, sharedPreferences.getPlaybackVolumeBoost())
-            attachEqualizer(id, sharedPreferences.getEqualizer())
           }
         },
       )
       attachEnhancer(player.audioSessionId, sharedPreferences.getPlaybackVolumeBoost())
-      attachEqualizer(player.audioSessionId, sharedPreferences.getEqualizer())
+
+      scope.launch {
+        val bands = equalizerBandProvider.getCapabilities().bands
+        withContext(Dispatchers.Main) {
+          val shouldReattach = equalizerBands != bands && bands.isNotEmpty()
+          equalizerBands = bands
+
+          if (shouldReattach) {
+            attachEnhancer(player.audioSessionId, sharedPreferences.getPlaybackVolumeBoost())
+          }
+        }
+      }
 
       scope.launch {
         sharedPreferences.playbackVolumeBoostFlow.collectLatest {
@@ -72,10 +87,10 @@ class PlaybackEnhancerService
       updateGain(sharedPreferences.getPlaybackVolumeBoost())
     }
 
-    // Boost goes through DynamicsProcessing (compressor + limiter) because LoudnessEnhancer
-    // has no limiter we control and clips audibly from ~6 dB of boost on some devices.
-    // LoudnessEnhancer stays as a best-effort fallback for sessions where the richer
-    // effect cannot attach.
+    // Boost and the equalizer both go through the one DynamicsProcessing instance (pre-EQ for
+    // the equalizer, compressor + limiter for boost) because LoudnessEnhancer has no limiter we
+    // control and clips audibly from ~6 dB of boost on some devices. LoudnessEnhancer stays as a
+    // best-effort fallback for sessions where the richer effect cannot attach.
     @OptIn(UnstableApi::class)
     private fun attachEnhancer(
       sessionId: Int,
@@ -117,27 +132,94 @@ class PlaybackEnhancerService
       sessionId: Int,
       db: Int,
     ): DynamicsProcessing {
+      val preEqInUse = equalizerBands.isNotEmpty()
+      val preEq = if (preEqInUse) buildPreEq() else null
       val config =
         DynamicsProcessing.Config
           .Builder(
             DynamicsProcessingTuning.VARIANT,
             DynamicsProcessingTuning.CHANNEL_COUNT,
-            false, // preEqInUse
-            0, // preEqBandCount
+            preEqInUse,
+            equalizerBands.size,
             true, // mbcInUse
             DynamicsProcessingTuning.MBC_BAND_COUNT,
             false, // postEqInUse
             0, // postEqBandCount
             true, // limiterInUse
-          ).setMbcAllChannelsTo(buildMbc(db.toFloat()))
+          ).apply {
+            preEq?.let { setPreEqAllChannelsTo(it) }
+          }.setMbcAllChannelsTo(buildMbc(db.toFloat(), enabled = db > 0))
           .setLimiterAllChannelsTo(buildLimiter())
           .build()
 
       // Constructor order: priority, audioSession, config.
-      return DynamicsProcessing(0, sessionId, config)
+      return DynamicsProcessing(0, sessionId, config).also { dynamicsProcessing ->
+        preEq?.let { requestedPreEq ->
+          logPreEqClamping(dynamicsProcessing, requestedPreEq)
+        }
+      }
     }
 
-    private fun buildMbc(postGainDb: Float): DynamicsProcessing.Mbc {
+    private fun buildPreEq(): DynamicsProcessing.Eq {
+      // Constructor order: inUse, enabled, bandCount.
+      val eq = DynamicsProcessing.Eq(true, true, equalizerBands.size)
+
+      equalizerBands.forEachIndexed { index, band ->
+        val gainDb =
+          when (equalizerSettings.isActive) {
+            true -> equalizerBandGainDb(equalizerSettings.gains, index)
+            false -> 0f
+          }
+
+        eq.setBand(
+          index,
+          DynamicsProcessing.EqBand(
+            true, // enabled
+            band.cutoffFreqHz.toFloat(),
+            gainDb,
+          ),
+        )
+      }
+
+      return eq
+    }
+
+    private fun logPreEqClamping(
+      dynamicsProcessing: DynamicsProcessing,
+      requestedPreEq: DynamicsProcessing.Eq,
+    ) {
+      try {
+        // AidlConversionDp::setParameter in AIDL effect HALs silently clamps descriptor ranges.
+        // The AOSP default permits 220..20_000 Hz cutoffs and a positive numeric_limits<float>::min() gain.
+        val readBackConfig = dynamicsProcessing.config
+        val clampedBands =
+          equalizerBands.mapIndexedNotNull { index, band ->
+            val requested = requestedPreEq.getBand(index)
+            val actual = readBackConfig.getPreEqBandByChannelIndex(0, index)
+
+            if (
+              abs(requested.cutoffFrequency - actual.cutoffFrequency) <= 0.01f &&
+              abs(requested.gain - actual.gain) <= 0.01f
+            ) {
+              null
+            } else {
+              "${band.centerFreqHz} Hz (cutoff ${requested.cutoffFrequency} -> ${actual.cutoffFrequency}, " +
+                "gain ${requested.gain} -> ${actual.gain})"
+            }
+          }
+
+        if (clampedBands.isNotEmpty()) {
+          Timber.w("DynamicsProcessing pre-EQ was clamped for ${clampedBands.joinToString()}")
+        }
+      } catch (ex: Exception) {
+        Timber.w("Unable to read back DynamicsProcessing pre-EQ configuration due to ${ex.message}")
+      }
+    }
+
+    private fun buildMbc(
+      postGainDb: Float,
+      enabled: Boolean,
+    ): DynamicsProcessing.Mbc {
       val band =
         DynamicsProcessing.MbcBand(
           true, // enabled
@@ -154,7 +236,7 @@ class PlaybackEnhancerService
         )
 
       // Constructor order: inUse, enabled, bandCount.
-      val mbc = DynamicsProcessing.Mbc(true, true, DynamicsProcessingTuning.MBC_BAND_COUNT)
+      val mbc = DynamicsProcessing.Mbc(true, enabled, DynamicsProcessingTuning.MBC_BAND_COUNT)
       mbc.setBand(0, band)
       return mbc
     }
@@ -174,16 +256,20 @@ class PlaybackEnhancerService
       )
 
     private fun updateGain(db: Int) {
+      playbackVolumeBoost = db
+
       try {
         val processor = dynamicsProcessing
         val fallback = loudnessEnhancer
 
-        if (db <= 0) {
-          processor?.enabled = false
+        if (processor != null) {
+          // Pre-EQ, the compressor and the limiter share the one effect. Keep it enabled
+          // whenever boost or the equalizer needs it, and bypass the MBC stage when there is
+          // no boost so the compressor cannot colour a boost-free session.
+          processor.setMbcAllChannelsTo(buildMbc(db.coerceAtLeast(0).toFloat(), enabled = db > 0))
+          processor.enabled = isEffectNeeded()
+        } else if (db <= 0) {
           fallback?.enabled = false
-        } else if (processor != null) {
-          processor.enabled = true
-          processor.setMbcAllChannelsTo(buildMbc(db.toFloat()))
         } else {
           fallback?.enabled = true
           fallback?.setTargetGain(loudnessEnhancerGainMb(db))
@@ -193,47 +279,28 @@ class PlaybackEnhancerService
       }
     }
 
-    @OptIn(UnstableApi::class)
-    private fun attachEqualizer(
-      sessionId: Int,
-      settings: EqualizerSettings,
-    ) {
-      equalizer?.release()
-      equalizer = null
-
-      if (sessionId == C.AUDIO_SESSION_ID_UNSET) return
-
-      try {
-        equalizer = Equalizer(0, sessionId)
-        applyEqualizer(settings)
-      } catch (ex: Exception) {
-        Timber.e("Unable to attach Equalizer due to ${ex.message}")
-      }
-    }
-
     private fun applyEqualizer(settings: EqualizerSettings) {
+      equalizerSettings = settings
+
       try {
-        val eq = equalizer ?: return
+        val processor = dynamicsProcessing ?: return
 
-        if (!eq.hasControl()) {
-          Timber.w("Equalizer lost control of the audio session, settings may not apply")
+        if (equalizerBands.isNotEmpty()) {
+          processor.setPreEqAllChannelsTo(buildPreEq())
         }
-
-        if (!settings.isActive) {
-          eq.enabled = false
-          return
-        }
-
-        eq.enabled = true
-        val range = eq.bandLevelRange
-
-        for (band in 0 until eq.numberOfBands.toInt()) {
-          eq.setBandLevel(band.toShort(), equalizerBandLevel(settings.gains, band, range[0], range[1]))
-        }
+        // updateGain toggles the same enabled flag from the boost side; both use the shared rule
+        // in isEffectNeeded, so active equalizer gains keep it alive only with a device-reported
+        // pre-EQ layout.
+        processor.enabled = isEffectNeeded()
       } catch (ex: Exception) {
         Timber.e("Unable to apply equalizer due to: $ex")
       }
     }
+
+    // The one DynamicsProcessing instance carries the pre-EQ equalizer, the compressor and the
+    // limiter, so it stays enabled while boost needs it or when active gains have a device-reported
+    // pre-EQ layout to apply.
+    private fun isEffectNeeded(): Boolean = playbackVolumeBoost > 0 || (equalizerSettings.isActive && equalizerBands.isNotEmpty())
 
     @OptIn(UnstableApi::class)
     private suspend fun applyAudioFocusLossPolicy(policy: AudioFocusLossPolicy) {
