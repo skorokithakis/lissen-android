@@ -85,6 +85,7 @@ class MediaLibrarySessionCallbackTest {
       MediaLibrarySessionCallback(
         context,
         playbackPreferences,
+        libraryPreferences,
         mediaRepository,
         provider,
         libraryTree,
