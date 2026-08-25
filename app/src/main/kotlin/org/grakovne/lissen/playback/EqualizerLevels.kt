@@ -28,4 +28,7 @@ fun equalizerBandCutoffsHz(centerFrequenciesHz: List<Int>): List<Int> =
     }
   }
 
+internal fun hasStrictlyIncreasingEqualizerBandCutoffs(cutoffFrequenciesHz: List<Int>): Boolean =
+  cutoffFrequenciesHz.zipWithNext().all { (first, second) -> first < second }
+
 private const val LAST_EQUALIZER_BAND_CUTOFF_HZ = 20_000

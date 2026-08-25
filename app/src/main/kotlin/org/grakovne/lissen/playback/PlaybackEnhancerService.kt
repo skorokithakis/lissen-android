@@ -191,11 +191,10 @@ class PlaybackEnhancerService
       try {
         // AidlConversionDp::setParameter in AIDL effect HALs silently clamps descriptor ranges.
         // The AOSP default permits 220..20_000 Hz cutoffs and a positive numeric_limits<float>::min() gain.
-        val readBackConfig = dynamicsProcessing.config
         val clampedBands =
           equalizerBands.mapIndexedNotNull { index, band ->
             val requested = requestedPreEq.getBand(index)
-            val actual = readBackConfig.getPreEqBandByChannelIndex(0, index)
+            val actual = dynamicsProcessing.getPreEqBandByChannelIndex(0, index)
 
             if (
               abs(requested.cutoffFrequency - actual.cutoffFrequency) <= 0.01f &&

@@ -69,10 +69,12 @@ class EqualizerBandProvider
               }
             }
 
+          val cutoffFrequenciesHz = equalizerBandCutoffsHz(centerFrequenciesHz)
           if (
             centerFrequenciesHz.isEmpty() ||
             centerFrequenciesHz.any { it <= 0 } ||
-            centerFrequenciesHz.zipWithNext().any { (first, second) -> first >= second }
+            centerFrequenciesHz.zipWithNext().any { (first, second) -> first >= second } ||
+            !hasStrictlyIncreasingEqualizerBandCutoffs(cutoffFrequenciesHz)
           ) {
             return@withContext EqualizerCapabilities.Unavailable
           }
@@ -81,7 +83,7 @@ class EqualizerBandProvider
           EqualizerCapabilities(
             bands =
               centerFrequenciesHz
-                .zip(equalizerBandCutoffsHz(centerFrequenciesHz)) { centerFreqHz, cutoffFreqHz ->
+                .zip(cutoffFrequenciesHz) { centerFreqHz, cutoffFreqHz ->
                   BandInfo(centerFreqHz = centerFreqHz, cutoffFreqHz = cutoffFreqHz)
                 },
             minDb = DynamicsProcessingTuning.PRE_EQ_MIN_GAIN_DB,

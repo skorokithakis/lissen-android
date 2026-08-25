@@ -1,6 +1,7 @@
 package org.grakovne.lissen.playback
 
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Test
 
 class EqualizerLevelsTest {
@@ -46,5 +47,12 @@ class EqualizerLevelsTest {
       listOf(44, 88, 177, 354, 707, 1414, 20_000),
       equalizerBandCutoffsHz(listOf(31, 62, 125, 250, 500, 1000, 2000)),
     )
+  }
+
+  @Test
+  fun `rejects a layout whose forced last cutoff is lower than the previous cutoff`() {
+    val cutoffs = equalizerBandCutoffsHz(listOf(20_000, 30_000))
+
+    assertFalse(hasStrictlyIncreasingEqualizerBandCutoffs(cutoffs))
   }
 }
