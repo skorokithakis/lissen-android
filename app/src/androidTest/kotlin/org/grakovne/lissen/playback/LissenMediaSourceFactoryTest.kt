@@ -18,7 +18,6 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 
-@RunWith(AndroidJUnit4::class)
 // The factory is given a DataSource.Factory rather than a DefaultMediaSourceFactory so that these
 // tests assert on the MediaSource the factory returns, which is what BasePlayer.getCurrentMediaItem
 // reads via the timeline window. Mocking the inner factory would only prove what we passed into it.
@@ -26,6 +25,7 @@ import org.junit.runner.RunWith
 // The extras assertions are not redundant with the enclosing metadata assertions: in Media3 1.11.0,
 // MediaMetadata.equals and RequestMetadata.equals only check whether extras is null, never its
 // contents. FILE_SEGMENTS and CHAPTER_START_MS have to be checked by hand.
+@RunWith(AndroidJUnit4::class)
 class LissenMediaSourceFactoryTest {
   private lateinit var lissenMediaSourceFactory: LissenMediaSourceFactory
 
