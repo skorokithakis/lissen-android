@@ -31,4 +31,20 @@ class EqualizerLevelsTest {
   fun `treats empty gains as flat`() {
     assertEquals(0f, equalizerBandGainDb(emptyList(), 0))
   }
+
+  @Test
+  fun `derives pre-EQ cutoffs from common five-band centres`() {
+    assertEquals(
+      listOf(117, 457, 1810, 7099, 20_000),
+      equalizerBandCutoffsHz(listOf(60, 230, 910, 3600, 14_000)),
+    )
+  }
+
+  @Test
+  fun `derives pre-EQ cutoffs from a longer device band list`() {
+    assertEquals(
+      listOf(44, 88, 177, 354, 707, 1414, 20_000),
+      equalizerBandCutoffsHz(listOf(31, 62, 125, 250, 500, 1000, 2000)),
+    )
+  }
 }

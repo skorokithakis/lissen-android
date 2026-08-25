@@ -30,12 +30,15 @@ class PlaybackEnhancerService
   constructor(
     private val player: ExoPlayer,
     private val sharedPreferences: PlaybackPreferences,
+    private val equalizerBandProvider: EqualizerBandProvider,
   ) : RunningComponent {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     private var dynamicsProcessing: DynamicsProcessing? = null
 
     private var loudnessEnhancer: LoudnessEnhancer? = null
+
+    private var equalizerBands: List<BandInfo> = emptyList()
 
     private var equalizerSettings: EqualizerSettings = sharedPreferences.getEqualizer()
 
@@ -51,6 +54,18 @@ class PlaybackEnhancerService
         },
       )
       attachEnhancer(player.audioSessionId, sharedPreferences.getPlaybackVolumeBoost())
+
+      scope.launch {
+        val bands = equalizerBandProvider.getCapabilities().bands
+        withContext(Dispatchers.Main) {
+          val shouldReattach = equalizerBands != bands && bands.isNotEmpty()
+          equalizerBands = bands
+
+          if (shouldReattach) {
+            attachEnhancer(player.audioSessionId, sharedPreferences.getPlaybackVolumeBoost())
+          }
+        }
+      }
 
       scope.launch {
         sharedPreferences.playbackVolumeBoostFlow.collectLatest {
@@ -116,49 +131,88 @@ class PlaybackEnhancerService
       sessionId: Int,
       db: Int,
     ): DynamicsProcessing {
+      val preEqInUse = equalizerBands.isNotEmpty()
+      val preEq = if (preEqInUse) buildPreEq() else null
       val config =
         DynamicsProcessing.Config
           .Builder(
             DynamicsProcessingTuning.VARIANT,
             DynamicsProcessingTuning.CHANNEL_COUNT,
-            true, // preEqInUse
-            DynamicsProcessingTuning.PRE_EQ_BAND_COUNT,
+            preEqInUse,
+            equalizerBands.size,
             true, // mbcInUse
             DynamicsProcessingTuning.MBC_BAND_COUNT,
             false, // postEqInUse
             0, // postEqBandCount
             true, // limiterInUse
-          ).setPreEqAllChannelsTo(buildPreEq())
-          .setMbcAllChannelsTo(buildMbc(db.toFloat(), enabled = db > 0))
+          ).apply {
+            preEq?.let { setPreEqAllChannelsTo(it) }
+          }.setMbcAllChannelsTo(buildMbc(db.toFloat(), enabled = db > 0))
           .setLimiterAllChannelsTo(buildLimiter())
           .build()
 
       // Constructor order: priority, audioSession, config.
-      return DynamicsProcessing(0, sessionId, config)
+      return DynamicsProcessing(0, sessionId, config).also { dynamicsProcessing ->
+        preEq?.let { requestedPreEq ->
+          logPreEqClamping(dynamicsProcessing, requestedPreEq)
+        }
+      }
     }
 
     private fun buildPreEq(): DynamicsProcessing.Eq {
       // Constructor order: inUse, enabled, bandCount.
-      val eq = DynamicsProcessing.Eq(true, true, DynamicsProcessingTuning.PRE_EQ_BAND_COUNT)
+      val eq = DynamicsProcessing.Eq(true, true, equalizerBands.size)
 
-      for (band in 0 until DynamicsProcessingTuning.PRE_EQ_BAND_COUNT) {
+      equalizerBands.forEachIndexed { index, band ->
         val gainDb =
           when (equalizerSettings.isActive) {
-            true -> equalizerBandGainDb(equalizerSettings.gains, band)
+            true -> equalizerBandGainDb(equalizerSettings.gains, index)
             false -> 0f
           }
 
         eq.setBand(
-          band,
+          index,
           DynamicsProcessing.EqBand(
             true, // enabled
-            DynamicsProcessingTuning.PRE_EQ_BAND_CUTOFF_FREQUENCIES_HZ[band],
+            band.cutoffFreqHz.toFloat(),
             gainDb,
           ),
         )
       }
 
       return eq
+    }
+
+    private fun logPreEqClamping(
+      dynamicsProcessing: DynamicsProcessing,
+      requestedPreEq: DynamicsProcessing.Eq,
+    ) {
+      try {
+        // AidlConversionDp::setParameter in AIDL effect HALs silently clamps descriptor ranges.
+        // The AOSP default permits 220..20_000 Hz cutoffs and a positive numeric_limits<float>::min() gain.
+        val readBackConfig = dynamicsProcessing.config
+        val clampedBands =
+          equalizerBands.mapIndexedNotNull { index, band ->
+            val requested = requestedPreEq.getBand(index)
+            val actual = readBackConfig.getPreEqBandByChannelIndex(0, index)
+
+            if (
+              requested.cutoffFrequency == actual.cutoffFrequency &&
+              requested.gain == actual.gain
+            ) {
+              null
+            } else {
+              "${band.centerFreqHz} Hz (cutoff ${requested.cutoffFrequency} -> ${actual.cutoffFrequency}, " +
+                "gain ${requested.gain} -> ${actual.gain})"
+            }
+          }
+
+        if (clampedBands.isNotEmpty()) {
+          Timber.w("DynamicsProcessing pre-EQ was clamped for ${clampedBands.joinToString()}")
+        }
+      } catch (ex: Exception) {
+        Timber.w("Unable to read back DynamicsProcessing pre-EQ configuration due to ${ex.message}")
+      }
     }
 
     private fun buildMbc(
@@ -230,8 +284,9 @@ class PlaybackEnhancerService
       try {
         val processor = dynamicsProcessing ?: return
 
-        processor.setPreEqAllChannelsTo(buildPreEq())
-
+        if (equalizerBands.isNotEmpty()) {
+          processor.setPreEqAllChannelsTo(buildPreEq())
+        }
         // updateGain toggles the same enabled flag from the boost side; both sides use the
         // shared rule in isEffectNeeded, so the equalizer alone keeps the effect alive.
         processor.enabled = isEffectNeeded()

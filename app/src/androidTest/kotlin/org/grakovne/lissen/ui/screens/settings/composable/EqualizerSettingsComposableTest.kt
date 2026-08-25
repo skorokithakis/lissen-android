@@ -20,6 +20,7 @@ import org.grakovne.lissen.R
 import org.grakovne.lissen.domain.EqualizerSettings
 import org.grakovne.lissen.playback.BandInfo
 import org.grakovne.lissen.playback.EqualizerCapabilities
+import org.grakovne.lissen.playback.equalizerBandCutoffsHz
 import org.junit.Rule
 import org.junit.Test
 
@@ -29,14 +30,11 @@ class EqualizerSettingsComposableTest {
 
   private val context = InstrumentationRegistry.getInstrumentation().targetContext
 
+  private val centerFrequenciesHz = listOf(60, 230, 910, 3600, 14_000)
   private val bands =
-    listOf(
-      BandInfo(centerFreqHz = 60),
-      BandInfo(centerFreqHz = 230),
-      BandInfo(centerFreqHz = 910),
-      BandInfo(centerFreqHz = 3600),
-      BandInfo(centerFreqHz = 14000),
-    )
+    centerFrequenciesHz.zip(equalizerBandCutoffsHz(centerFrequenciesHz)) { centerFreqHz, cutoffFreqHz ->
+      BandInfo(centerFreqHz = centerFreqHz, cutoffFreqHz = cutoffFreqHz)
+    }
 
   private val capabilities = EqualizerCapabilities(bands = bands, minDb = -15, maxDb = 15)
 
