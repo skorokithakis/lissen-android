@@ -46,8 +46,9 @@ class MediaLibrarySessionProvider
             Intent.FLAG_GRANT_PREFIX_URI_PERMISSION,
         )
       }
+      val sessionPlayer = BookTimeForwardingPlayer(player = exoPlayer)
       return MediaLibraryService.MediaLibrarySession
-        .Builder(mediaLibraryService, exoPlayer, callback)
+        .Builder(mediaLibraryService, sessionPlayer, callback)
         .setSessionActivity(
           PendingIntent.getActivity(
             context,
